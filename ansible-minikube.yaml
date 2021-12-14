@@ -1,0 +1,187 @@
+---
+- name: Ansible minikube
+  hosts: localhost
+  gather_facts: False
+  connection: local
+
+#Namespace
+  tasks:    
+    - name: Crear Namespace
+      k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: scabrera
+#PersistentVolume
+    - name: Crear PersistentVolume
+      k8s:
+        state: present
+        definition: 
+          apiVersion: v1
+          kind: PersistentVolume
+          metadata:
+            name: scabrera-pv
+            namespace: scabrera
+            labels:
+              app: scabrera-db
+          spec:
+            storageClassName: manual
+            capacity:
+              storage: 1Gi
+            accessModes:
+              - ReadWriteOnce
+            hostPath:
+              path: "/mnt/data"
+#PersistentVolumeClaim
+    - name: Crear PersistentVolumeClaim
+      k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: scabrera-pvc
+            namespace: scabrera
+            labels:
+              app: scabrera-db
+          spec:
+            accessModes:
+              - ReadWriteMany
+            resources:
+              requests:
+                storage: 1Gi
+#Deployment DB
+    - name: Deployment Base de datos
+      k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: scabrera-db
+            namespace: scabrera
+            labels:
+              app: scabrera-db
+              tier: mysql
+          spec:
+            strategy:
+              type: Recreate
+            selector:
+              matchLabels:
+                app: scabrera-db
+                tier: mysql
+            template:
+              metadata:
+                labels:
+                  app: scabrera-db
+                  tier: mysql
+              spec:
+                volumes:
+                - name: storage-ps
+                  persistentVolumeClaim:
+                    claimName: scabrera-pvc
+                containers:
+                - image: sergiodocker11/db-scabrera
+                  name: db-scabrera
+                  ports:
+                  - containerPort: 3306
+                  volumeMounts:
+                  - name: storage-ps
+                    mountPath: /var/lib/mysql
+#Service DB
+    - name: Servicio Base de datos
+      k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: scabrera-db
+            namespace: scabrera
+            labels:
+              app: scabrera-db
+          spec:
+            ports:
+            - protocol: "TCP"
+              port: 3306
+              targetPort: 3306
+            selector:
+              app: scabrera-db
+              tier: mysql
+#Deployment CRUD
+    - name: Deployment Crud
+      k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: scabrera-crud
+            namespace: scabrera
+            labels:
+              app: scabrera-crud
+              tier: php
+          spec:
+            selector:
+              matchLabels:
+                app: scabrera-crud
+                tier: php
+            replicas: 7
+            strategy:
+              type: Recreate
+            template:
+              metadata:
+                labels:
+                  app: scabrera-crud
+                  tier: php
+              spec:
+                containers:
+                - image: sergiodocker11/app2-scabrera
+                  name: scabrera-crud
+                  ports:
+                  - containerPort: 80
+#Service CRUD
+    - name: Servicio Crud
+      k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: scabrera-crud
+            namespace: scabrera
+          spec:
+            selector:
+              app: scabrera-crud
+              tier: php
+            ports:
+            - protocol: "TCP"
+              port: 80
+              targetPort: 80
+            type: LoadBalancer 
+#Ingress
+    - name: Ingress
+      k8s:
+        state: present
+        definition:
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: scabrera-ingress
+            namespace: scabrera
+            annotations:
+              nginx.ingress.kubernetes.io/rewrite-target: /
+          spec:
+            rules:
+            - host: app.scabrera.com
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: scabrera-crud
+                      port:
+                        number: 80
